@@ -37,7 +37,6 @@ jsonschema==4.19.2
 jsonschema-specifications==2023.7.1
 kiwisolver==1.4.5
 lxml==4.9.3
-Markdown==3.5.1
 markdown-it-py==3.0.0
 markdownlit==0.0.7
 MarkupSafe==2.1.3
