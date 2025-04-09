@@ -4,21 +4,21 @@ All credit goes to benno094, who originally created the code.
 
 ## Introduction
 
-PDF to Anki program using GPT 4o mini from OpenAI. Streamlit is the web-GUI. Shout-out to OpenAI and Streamlit for saving me a ton of work!
+PDF to Anki program using Mistral Large from Mistral AI. Streamlit is the web-GUI. Shout-out to Mistral AI and Streamlit for saving me a ton of work!
 
 ## Requirements:
 
-- An OpenAI API key
+- A Mistral API key
 - Anki running with AnkiConnect installed (Addon #: 2055492159)
 - Not needed, but highly recommend AnKing Notetype (Addon #: 952691989)
 
 *If compiling to run locally:*
-- An OpenAI key
-    - Needs to be added as OPENAI_API_KEY="[Key here]" in .streamlit\secrets.toml
+- A Mistral API key
+    - Needs to be added as MISTRAL_API_KEY="[Key here]" in .streamlit\secrets.toml
 
 ## Usage:
 
-1. Add an OpenAI API key.
+1. Add a Mistral API key.
 2. Choose a PDF file.
 3. Select a page range and a deck for the flashcards to be added to.
 4. Flash cards are generated for each page and can then be modified before being added to Anki.
@@ -34,6 +34,13 @@ Note: App adds a custom note type (AnKingOverhual) so that there is no issue wit
 - Error handling of api errors
 
 ### Changelog:
+
+0.84 Beta
+
+- Switched from OpenAI GPT-4 to Mistral Large
+- Updated API integration to use Mistral AI
+- Improved error handling for Mistral API
+- Updated documentation and requirements
 
 0.83 Beta
 

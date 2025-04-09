@@ -6,22 +6,18 @@ import os
 import fitz  # PyMuPDF
 from PIL import Image
 from io import BytesIO
-import openai
-from openai import OpenAI
 import re
 import uuid
 import hashlib
 import streamlit as st
 import streamlit.components.v1 as components
 import markdown
-
-client = OpenAI()
+from mistral_config import create_mistral_client, create_chat_message, make_api_request
 
 # Custom component to call AnkiConnect on client side
 parent_dir = os.path.dirname(os.path.abspath(__file__))
 build_dir = os.path.join(parent_dir, "API/frontend/build")
 _API = components.declare_component("API", path=build_dir)
-
 
 def API(action, key=None, deck=None, image=None, front=None, back=None, tags=None, flashcards=None,
         filename=None):
@@ -29,13 +25,10 @@ def API(action, key=None, deck=None, image=None, front=None, back=None, tags=Non
                            flashcards=flashcards, filename=filename)
     return component_value
 
-
 class Actions:
     def __init__(self, root):
         self.root = root
 
-    # TODO: Extract pictures from PDF to add to flashcards.
-    # TODO: Detect if page is mainly diagram and don't extract text.
     def check_API(self, key=None):
         response = API(action="reqPerm", key=key)
         if response is not False and response is not None:
@@ -46,43 +39,33 @@ class Actions:
         if decks is not False and decks is not None:
             st.session_state['decks'] = decks
 
+    @make_api_request
     def get_lang(self, text):
         if st.session_state['API_KEY'] == "":
-            client.api_key = st.secrets['OPENAI_API_KEY']
+            client = create_mistral_client(st.secrets['MISTRAL_API_KEY'])
         else:
-            client.api_key = st.session_state['API_KEY']
+            client = create_mistral_client(st.session_state['API_KEY'])
 
         try:
-            completion = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": f"Return in one word the language of this text: {text}"}
-                ]
+            messages = [
+                create_chat_message("system", "You are a helpful assistant."),
+                create_chat_message("user", f"Return in one word the language of this text: {text}")
+            ]
+            
+            completion = client.chat(
+                model="mistral-large-latest",
+                messages=messages
             )
-        except openai.APIError as e:
-            st.warning(f"OpenAI API returned an API Error:\n\n{str(e)}\n\n**Refresh the page and try again**")
-            st.session_state["openai_error"] = e
-            st.stop()
-        except openai.APIConnectionError as e:
-            st.warning(f"Failed to connect to OpenAI API:\n\n{str(e)}\n\n**Refresh the page and try again**")
-            st.session_state["openai_error"] = e
-            st.stop()
-        except openai.RateLimitError as e:
-            st.warning(
-                f"OpenAI API request exceeded rate limit::\n\n{str(e)}\n\n**Fix the problem, refresh the page and try again**")
-            st.session_state["openai_error"] = e
+            
+            return completion.choices[0].message.content
+            
+        except Exception as e:
+            st.warning(f"Mistral API returned an error:\n\n{str(e)}\n\n**Refresh the page and try again**")
+            st.session_state["mistral_error"] = e
             st.stop()
 
-        return completion.choices[0].message.content
-
+    @make_api_request
     def send_to_gpt(self, page):
-        # TODO: Check token count and send several pages, if possible
-        # TODO: Add timeout
-        # if "prompt" not in st.session_state:
-        # if st.session_state["fine_tuning"] == True:
-        # st.session_state["prompt"] = "You are receiving the text from one slide of a lecture. Use the following principles when making the flashcards. Return json."
-        # else:
         st.session_state["prompt"] = """
 You are receiving the text from one slide of a lecture. Use the following principles when making the flashcards:
 
@@ -131,7 +114,6 @@ End of Example
 - If whole slide fits on one flashcard, do that.
 - Use 'null_function' if page is just a title slide.
 - Return json.
-
 """
 
         new_chunk = st.session_state['text_' + str(page)]
@@ -140,172 +122,62 @@ End of Example
         behaviour = "You are a flashcard making assistant. Follow the user's requirements carefully and to the letter. Always call one of the provided functions."
 
         if st.session_state['API_KEY'] == "":
-            client.api_key = st.secrets['OPENAI_API_KEY']
+            client = create_mistral_client(st.secrets['MISTRAL_API_KEY'])
         else:
-            client.api_key = st.session_state['API_KEY']
+            client = create_mistral_client(st.session_state['API_KEY'])
 
         max_retries = 3
         retries = 0
         while retries < max_retries:
             try:
-                # completion = client.chat.completions.create(
-                #     model=st.session_state["model"],
-                #     messages=[
-                #         {
-                #             "role": "system",
-                #             "content": behaviour
-                #         },
-                #         {
-                #             "role": "user",
-                #             "content": new_chunk
-                #         }],
-                #         temperature=1,
-                # )
-                completion = client.chat.completions.create(
-                    model=st.session_state["model"],
-                    response_format={"type": "json_object"},
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": behaviour
-                        },
-                        {
-                            "role": "user",
-                            "content": new_chunk
-                        }
-                    ],
-                    tools=[
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": "flashcard_function",
-                                "description": "Create flashcards",
-                                "parameters": {
-                                    "type": "object",
-                                    "properties": {
-                                        "flashcards": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "front": {"type": "string",
-                                                              "description": "Front side of the flashcard; a statement"},
-                                                    "back": {"type": "string",
-                                                             "description": "Back side of the flashcard; the explanation"}
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": "null_function",
-                                "description": "Function to use if page is just a table of contents, learning objectives or a title slide",
-                                "parameters": {
-                                    "type": "object",
-                                    "properties": {}
-                                }
-                            }
-                        }
-                    ],
-                    # TODO: play with temperature
-                    temperature=0.8,
+                messages = [
+                    create_chat_message("system", behaviour),
+                    create_chat_message("user", new_chunk)
+                ]
+                
+                completion = client.chat(
+                    model="mistral-large-latest",
+                    messages=messages,
+                    temperature=0.8
                 )
-            except openai.APIError as e:
-                continue
-            except openai.APIConnectionError as e:
-                continue
-            except openai.RateLimitError as e:
-                st.warning(
-                    f"OpenAI API request exceeded rate limit::\n\n{str(e)}\n\n**Fix the problem, refresh the page and try again**")
-                st.session_state["openai_error"] = e
-                st.stop()
-
-            print(f"Call no. {str(retries + 1)} for slide {str(page + 1)}")
-            if completion.choices[0].message.tool_calls is not None:
-
-                if completion.choices[0].message.tool_calls[0].function.name == "null_function" or completion.choices[
-                    0].message.content == "null_function":
+                
+                response = completion.choices[0].message.content
+                
+                if "null_function" in response:
                     st.session_state[f"{str(page)}_is_title"] = True
                     return None
-
-            try:
-                if completion.choices[0].message.tool_calls:
-                    return completion.choices[0].message.tool_calls[0].function.arguments
-                elif completion.choices[0].message.content:
-                    return completion.choices[0].message.content
-
+                    
+                return response
+                
             except Exception as e:
-                print("Error: ", e)
-                print("Returned response:\n", completion.choices[0].message.tool_calls)
-                continue
-            print("Un-caught response:\n", completion.choices[0].message)
-            retries += 1
+                print(f"Error: {str(e)}")
+                retries += 1
+                if retries == max_retries:
+                    st.warning(f"Mistral API error:\n\n{str(e)}\n\n**Fix the problem, refresh the page and try again**")
+                    st.session_state["mistral_error"] = e
+                    st.stop()
 
     def add_image_to_anki(self, image_path, pdf_name, page):
         try:
-            # Read the image as binary data and encode it in base64 format
             with open(image_path, "rb") as img_file:
                 image_data = base64.b64encode(img_file.read()).decode('utf-8')
 
-            # Create a custom file name using the PDF name and page number
             base_name = os.path.basename(pdf_name)
             base_name_without_ext = os.path.splitext(base_name)[0]
             filename = f"{base_name_without_ext}_page_{page + 1}.jpg"
 
-            # Call the API to store the image in Anki's media folder
             image_stored = API("storeImage", image=image_data, filename=filename)
-
-            # Simplified: No success or error messages related to image storage
             return image_stored
 
         except Exception as e:
-            # Log error internally but do not raise it to the user
             st.error(f"add_image_to_anki error: {str(e)}")
             return None
 
-    def add_to_anki(self, cards, page):
-        deck = st.session_state[f"{st.session_state['deck_key']}"]
-        true_list = []
-        for i in range(st.session_state["flashcards_" + str(page) + "_count"]):
-            if f"fc_active_{page, i}" in st.session_state and st.session_state.get(f"fc_active_{page, i}", True):
-                true_list.append((i))
-
-        notes = []
-
-        try:
-            # TODO: Process response from API
-            # TODO: Turn cards into "span" so they don't become paragraphs: https://python-markdown.github.io/extensions/md_in_html/
-            # TODO: Add all cards in on go, so some don't occasionally not get added
-            for index, card in enumerate(cards):
-                no = true_list[index]
-                front = markdown.markdown(card['front'], extensions=['nl2br'])
-                back = markdown.markdown(card['back'], extensions=['nl2br'])
-                tags = st.session_state["flashcards_" + str(page) + "_tags"]
-                note = {
-                    "deckName": deck,
-                    "modelName": "AnkingOverhaul",
-                    "front": front,
-                    "back": back,
-                    "tags": [tags]
-                }
-
-                notes.append(note)
-
-            API("addNotes", deck=deck, flashcards=notes)
-            return True
-        except Exception as e:
-             raise ValueError("add_to_anki error: ", e)
-
     def cleanup_response(self, text):
         try:
-            # Check if the response starts with 'flashcard_function(' and remove it
             prefix = 'flashcard_function('
             if text.startswith(prefix):
-                text = text[len(prefix):-1]  # remove the prefix and the closing parenthesis
+                text = text[len(prefix):-1]
 
                 json_strs = text.strip().split('\n})\n')
                 json_strs = [text + '}' if not text.endswith('}') else text for text in json_strs]
@@ -313,30 +185,18 @@ End of Example
 
                 text = json_strs[0]
 
-            # Escape inner square brackets
             response_text_escaped = re.sub(r'(?<=\[)[^\[\]]*(?=\])', self.escape_inner_brackets, text)
-            # print("Response text escaped:", response_text_escaped)
-
-            # Replace curly quotes with standard double quotes
             response_text_standard_quotes = self.replace_curly_quotes(response_text_escaped)
-            # print("Curly quotes removed:", response_text_standard_quotes)
-
-            # Replace inner double quotes with single quotes
             response_text_single_quotes = re.sub(r'("(?:[^"\\]|\\.)*")', self.replace_inner_double_quotes,
                                                  response_text_standard_quotes)
-            # print("Double quotes removed:", response_text_single_quotes)
 
-            # Parse the JSON data
             response_cards = json.loads(response_text_single_quotes, strict=False)
-            # print("Parsed:", response_cards)
-
-            # Extract the "flashcards" array
             response_data = response_cards["flashcards"]
 
             return response_data
 
         except Exception as e:
-            print(f"Error with OpenAI's GPT-4o mini: {str(e)}\nReturned:\n{text}")
+            print(f"Error with Mistral API: {str(e)}\nReturned:\n{text}")
 
     def escape_inner_brackets(self, match_obj):
         inner_text = match_obj.group(0)
@@ -344,15 +204,13 @@ End of Example
         return escaped_text
 
     def replace_curly_quotes(self, text):
-        return text.replace('“', "'").replace('”', "'").replace('„', "'")
+        return text.replace('"', "'").replace('"', "'").replace('„', "'")
 
     def replace_inner_double_quotes(self, match_obj):
         inner_text = match_obj.group(0)
-        # Match the fields containing double quotes
         pattern = r'(:\s*)("[^"]*")'
         matches = re.findall(pattern, inner_text)
 
-        # Replace the double quotes inside the fields with single quotes
         for match in matches:
             inner_quotes_replaced = match[1].replace('"', "'")
             inner_text = inner_text.replace(match[1], inner_quotes_replaced)
